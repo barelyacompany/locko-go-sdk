@@ -85,7 +85,6 @@ Creates a new Locko client. Accepts optional functional options.
 
 | Option | Description |
 |--------|-------------|
-| `locko.WithServerURL(url string)` | Override the default server URL (`https://api-locko.barelyacompany.com/api`). Trailing slashes are stripped automatically. |
 | `locko.WithHTTPClient(client *http.Client)` | Use a custom `*http.Client` (e.g. to set timeouts or a custom transport). |
 
 **Example with options:**
@@ -99,7 +98,6 @@ httpClient := &http.Client{Timeout: 5 * time.Second}
 client := locko.NewClient(
     "your-api-key",
     locko.WithHTTPClient(httpClient),
-    locko.WithServerURL("https://my-self-hosted-locko.example.com/api"),
 )
 ```
 
