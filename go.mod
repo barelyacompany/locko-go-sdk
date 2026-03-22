@@ -1,3 +1,3 @@
-module github.com/barelyacompany/locko-go-sdk
+module github.com/barelyacompany/locko
 
 go 1.21

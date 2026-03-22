@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"testing"
 
-	locko "github.com/barelyacompany/locko-go-sdk"
+	locko "github.com/barelyacompany/locko"
 )
 
 // sampleEntries is the fixture used across multiple tests.
