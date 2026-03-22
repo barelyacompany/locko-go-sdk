@@ -12,9 +12,7 @@ Requires Go 1.21 or later. No external dependencies.
 
 ## Quick Start
 
-### Early initialisation (recommended)
-
-Call `InjectIntoEnv` at the very top of `main()` — before initialising any subsystem that reads from `os.Getenv` (databases, caches, HTTP clients, etc.). This writes every Locko value directly into the process environment so the rest of your app boots with the correct config already in place.
+Fetch your config and wire it up explicitly. This keeps your dependencies clear and your code testable.
 
 ```go
 package main
@@ -32,12 +30,12 @@ import (
 func main() {
     client := locko.NewClient(os.Getenv("LOCKO_API_KEY"))
 
-    if err := client.InjectIntoEnv(context.Background(), false); err != nil {
+    cfg, err := client.GetConfig(context.Background())
+    if err != nil {
         log.Fatalf("failed to load config from Locko: %v", err)
     }
 
-    // os.Getenv now returns values from Locko
-    db, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
+    db, err := sql.Open("postgres", cfg["DATABASE_URL"])
     if err != nil {
         log.Fatal(err)
     }
@@ -45,23 +43,29 @@ func main() {
 }
 ```
 
-The second argument (`override`) controls whether Locko values overwrite variables that are already set in the environment:
+### Fetching specific subsets
 
 ```go
-client.InjectIntoEnv(ctx, false) // safe — won't clobber existing env
-client.InjectIntoEnv(ctx, true)  // force-overwrite everything
+// Only secret entries
+secrets, err := client.GetSecrets(ctx)
+
+// Only plain (non-secret) variables
+vars, err := client.GetVariables(ctx)
 ```
 
-### Fetching config manually
+### Injecting into the process environment (optional)
 
-If you prefer to work with the values directly rather than writing to the environment:
+If your codebase already reads broadly from `os.Getenv` and you want Locko values picked up automatically, you can inject them in:
 
 ```go
-cfg, err := client.GetConfig(context.Background())
-if err != nil {
+// false = won't overwrite keys already in the environment
+if err := client.InjectIntoEnv(ctx, false); err != nil {
     log.Fatal(err)
 }
-fmt.Println("DATABASE_URL:", cfg["DATABASE_URL"])
+// true = force-overwrite everything
+if err := client.InjectIntoEnv(ctx, true); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## Configuration
