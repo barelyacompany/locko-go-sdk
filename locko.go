@@ -8,10 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 )
 
-const defaultServerURL = "https://api-locko.barelyacompany.com/api"
+const apiURL = "https://api-locko.barelyacompany.com/api/api-keys/config"
 
 // ConfigEntry represents a single configuration or secret entry returned by the Locko API.
 type ConfigEntry struct {
@@ -35,51 +34,26 @@ func (e *ErrServer) Error() string {
 	return fmt.Sprintf("locko: server error (status %d)", e.StatusCode)
 }
 
-// Option is a functional option for configuring a Client.
-type Option func(*Client)
-
-// WithServerURL overrides the default Locko server URL.
-func WithServerURL(url string) Option {
-	return func(c *Client) {
-		c.serverURL = strings.TrimRight(url, "/")
-	}
-}
-
-// WithHTTPClient replaces the default *http.Client used for requests.
-func WithHTTPClient(client *http.Client) Option {
-	return func(c *Client) {
-		c.httpClient = client
-	}
-}
-
 // Client is the Locko API client. Create one with NewClient.
 type Client struct {
 	apiKey     string
-	serverURL  string
 	httpClient *http.Client
 }
 
-// NewClient creates a new Locko Client with the given API key and optional options.
-func NewClient(apiKey string, opts ...Option) *Client {
-	c := &Client{
-		apiKey:     apiKey,
-		serverURL:  defaultServerURL,
-		httpClient: &http.Client{},
+// NewClient creates a new Locko Client with the given API key.
+// Optionally provide a custom *http.Client (e.g. to set timeouts).
+func NewClient(apiKey string, httpClient ...*http.Client) *Client {
+	c := &Client{apiKey: apiKey, httpClient: &http.Client{}}
+	if len(httpClient) > 0 && httpClient[0] != nil {
+		c.httpClient = httpClient[0]
 	}
-	for _, opt := range opts {
-		opt(c)
-	}
-	// Ensure no trailing slash on the default URL either.
-	c.serverURL = strings.TrimRight(c.serverURL, "/")
 	return c
 }
 
 // GetConfigEntries fetches all configuration entries (both secrets and plain variables)
 // from the Locko API and returns them as a slice of ConfigEntry.
 func (c *Client) GetConfigEntries(ctx context.Context) ([]ConfigEntry, error) {
-	url := c.serverURL + "/api-keys/config"
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("locko: failed to build request: %w", err)
 	}
@@ -139,37 +113,6 @@ func (c *Client) GetSecrets(ctx context.Context) (map[string]string, error) {
 	return result, nil
 }
 
-// InjectIntoEnv fetches all configuration entries and writes them into the
-// process environment via os.Setenv. Call this at the very start of main(),
-// before initialising any subsystem that reads from os.Getenv (databases,
-// caches, HTTP clients, etc.).
-//
-// By default existing environment variables are not overwritten. Pass
-// override=true to force-overwrite them.
-//
-//	func main() {
-//	    client := locko.NewClient(os.Getenv("LOCKO_API_KEY"))
-//	    if err := client.InjectIntoEnv(context.Background(), false); err != nil {
-//	        log.Fatal(err)
-//	    }
-//	    // os.Getenv("DATABASE_URL") now works
-//	    db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
-//	}
-func (c *Client) InjectIntoEnv(ctx context.Context, override bool) error {
-	entries, err := c.GetConfigEntries(ctx)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if override || os.Getenv(e.Key) == "" {
-			if err := os.Setenv(e.Key, e.Value); err != nil {
-				return fmt.Errorf("locko: failed to set env var %q: %w", e.Key, err)
-			}
-		}
-	}
-	return nil
-}
-
 // GetVariables fetches all configuration entries and returns only those NOT marked as
 // secrets, as a flat key→value map.
 func (c *Client) GetVariables(ctx context.Context) (map[string]string, error) {
@@ -184,4 +127,23 @@ func (c *Client) GetVariables(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return result, nil
+}
+
+// InjectIntoEnv fetches all configuration entries and writes them into the
+// process environment via os.Setenv.
+//
+// When override is false, keys already present in the environment are left untouched.
+func (c *Client) InjectIntoEnv(ctx context.Context, override bool) error {
+	entries, err := c.GetConfigEntries(ctx)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if override || os.Getenv(e.Key) == "" {
+			if err := os.Setenv(e.Key, e.Value); err != nil {
+				return fmt.Errorf("locko: failed to set env var %q: %w", e.Key, err)
+			}
+		}
+	}
+	return nil
 }
