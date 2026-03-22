@@ -12,6 +12,8 @@ Requires Go 1.21 or later. No external dependencies.
 
 ## Quick Start
 
+> **You need an API key to fetch config.** The API key is the one credential you must supply yourself — as a real environment variable, a CI secret, or a vault entry. It authenticates the request to Locko; it cannot come from Locko itself.
+
 Fetch your config and wire it up explicitly. This keeps your dependencies clear and your code testable.
 
 ```go
@@ -28,6 +30,7 @@ import (
 )
 
 func main() {
+    // LOCKO_API_KEY must already be set before this runs
     client := locko.NewClient(os.Getenv("LOCKO_API_KEY"))
 
     cfg, err := client.GetConfig(context.Background())
