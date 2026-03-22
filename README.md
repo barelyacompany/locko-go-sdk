@@ -12,27 +12,56 @@ Requires Go 1.21 or later. No external dependencies.
 
 ## Quick Start
 
+### Early initialisation (recommended)
+
+Call `InjectIntoEnv` at the very top of `main()` — before initialising any subsystem that reads from `os.Getenv` (databases, caches, HTTP clients, etc.). This writes every Locko value directly into the process environment so the rest of your app boots with the correct config already in place.
+
 ```go
 package main
 
 import (
     "context"
-    "fmt"
+    "database/sql"
     "log"
+    "os"
 
     locko "github.com/barelyacompany/locko-go-sdk"
+    _ "github.com/lib/pq"
 )
 
 func main() {
-    client := locko.NewClient("your-api-key")
+    client := locko.NewClient(os.Getenv("LOCKO_API_KEY"))
 
-    cfg, err := client.GetConfig(context.Background())
+    if err := client.InjectIntoEnv(context.Background(), false); err != nil {
+        log.Fatalf("failed to load config from Locko: %v", err)
+    }
+
+    // os.Getenv now returns values from Locko
+    db, err := sql.Open("postgres", os.Getenv("DATABASE_URL"))
     if err != nil {
         log.Fatal(err)
     }
-
-    fmt.Println("DATABASE_URL:", cfg["DATABASE_URL"])
+    defer db.Close()
 }
+```
+
+The second argument (`override`) controls whether Locko values overwrite variables that are already set in the environment:
+
+```go
+client.InjectIntoEnv(ctx, false) // safe — won't clobber existing env
+client.InjectIntoEnv(ctx, true)  // force-overwrite everything
+```
+
+### Fetching config manually
+
+If you prefer to work with the values directly rather than writing to the environment:
+
+```go
+cfg, err := client.GetConfig(context.Background())
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("DATABASE_URL:", cfg["DATABASE_URL"])
 ```
 
 ## Configuration
@@ -100,6 +129,16 @@ func (c *Client) GetVariables(ctx context.Context) (map[string]string, error)
 ```
 
 Returns only entries **not** marked as secrets (`"secret": false`) as a flat `key → value` map.
+
+---
+
+### InjectIntoEnv
+
+```go
+func (c *Client) InjectIntoEnv(ctx context.Context, override bool) error
+```
+
+Fetches all entries and writes them into the process environment via `os.Setenv`. When `override` is `false`, keys that already exist in the environment are left untouched.
 
 ---
 

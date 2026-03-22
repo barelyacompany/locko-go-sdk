@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -136,6 +137,37 @@ func (c *Client) GetSecrets(ctx context.Context) (map[string]string, error) {
 		}
 	}
 	return result, nil
+}
+
+// InjectIntoEnv fetches all configuration entries and writes them into the
+// process environment via os.Setenv. Call this at the very start of main(),
+// before initialising any subsystem that reads from os.Getenv (databases,
+// caches, HTTP clients, etc.).
+//
+// By default existing environment variables are not overwritten. Pass
+// override=true to force-overwrite them.
+//
+//	func main() {
+//	    client := locko.NewClient(os.Getenv("LOCKO_API_KEY"))
+//	    if err := client.InjectIntoEnv(context.Background(), false); err != nil {
+//	        log.Fatal(err)
+//	    }
+//	    // os.Getenv("DATABASE_URL") now works
+//	    db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL"))
+//	}
+func (c *Client) InjectIntoEnv(ctx context.Context, override bool) error {
+	entries, err := c.GetConfigEntries(ctx)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if override || os.Getenv(e.Key) == "" {
+			if err := os.Setenv(e.Key, e.Value); err != nil {
+				return fmt.Errorf("locko: failed to set env var %q: %w", e.Key, err)
+			}
+		}
+	}
+	return nil
 }
 
 // GetVariables fetches all configuration entries and returns only those NOT marked as
