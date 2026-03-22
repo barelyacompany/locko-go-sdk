@@ -1,6 +1,6 @@
 # locko-go-sdk
 
-Official Go SDK for [Locko](https://barelyacompany.com) — a secrets and configuration management tool.
+Official Go SDK for [Locko](https://locko.barelyacompany.com) — a secrets and configuration management tool.
 
 ## Installation
 
