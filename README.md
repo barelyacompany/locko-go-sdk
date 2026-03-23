@@ -5,7 +5,7 @@ Official Go SDK for [Locko](https://locko.barelyacompany.com) — a secrets and 
 ## Installation
 
 ```bash
-go get github.com/barelyacompany/locko
+go get github.com/barelyacompany/locko-go-sdk
 ```
 
 Requires Go 1.21 or later. No external dependencies.
@@ -25,7 +25,7 @@ import (
     "log"
     "os"
 
-    locko "github.com/barelyacompany/locko"
+    locko "github.com/barelyacompany/locko-go-sdk"
     _ "github.com/lib/pq"
 )
 

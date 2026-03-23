@@ -10,7 +10,7 @@ import (
 	"os"
 	"testing"
 
-	locko "github.com/barelyacompany/locko"
+	locko "github.com/barelyacompany/locko-go-sdk"
 )
 
 // sampleEntries is the fixture used across multiple tests.
