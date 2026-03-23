@@ -1,4 +1,3 @@
-// Package locko provides a Go client for the Locko secrets and config management API.
 package locko
 
 import (
@@ -8,24 +7,25 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
+	"time"
 )
 
 const apiURL = "https://api-locko.barelyacompany.com/api/api-keys/config"
 
-// ConfigEntry represents a single configuration or secret entry returned by the Locko API.
+const defaultTimeout = 3 * time.Second
+
 type ConfigEntry struct {
 	Key    string `json:"key"`
 	Value  string `json:"value"`
 	Secret bool   `json:"secret"`
 }
 
-// ErrUnauthorized is returned when the API responds with HTTP 401.
 var ErrUnauthorized = errors.New("locko: unauthorized — check your API key")
 
-// ErrNotFound is returned when the API responds with HTTP 404.
 var ErrNotFound = errors.New("locko: resource not found")
 
-// ErrServer represents an unexpected server-side error and carries the HTTP status code.
 type ErrServer struct {
 	StatusCode int
 }
@@ -34,24 +34,61 @@ func (e *ErrServer) Error() string {
 	return fmt.Sprintf("locko: server error (status %d)", e.StatusCode)
 }
 
-// Client is the Locko API client. Create one with NewClient.
+type prefetchResult struct {
+	entries []ConfigEntry
+	warning string
+}
+
 type Client struct {
 	apiKey     string
 	httpClient *http.Client
+	resultCh   chan prefetchResult
+	once       sync.Once
+	cached     prefetchResult
 }
 
-// NewClient creates a new Locko Client with the given API key.
-// Optionally provide a custom *http.Client (e.g. to set timeouts).
 func NewClient(apiKey string, httpClient ...*http.Client) *Client {
-	c := &Client{apiKey: apiKey, httpClient: &http.Client{}}
+	hc := &http.Client{Timeout: defaultTimeout}
 	if len(httpClient) > 0 && httpClient[0] != nil {
-		c.httpClient = httpClient[0]
+		hc = httpClient[0]
 	}
+	c := &Client{
+		apiKey:     apiKey,
+		httpClient: hc,
+		resultCh:   make(chan prefetchResult, 1),
+	}
+	go c.backgroundFetch()
 	return c
 }
 
-// GetConfigEntries fetches all configuration entries (both secrets and plain variables)
-// from the Locko API and returns them as a slice of ConfigEntry.
+func (c *Client) backgroundFetch() {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
+	defer cancel()
+
+	entries, err := c.GetConfigEntries(ctx)
+	if err != nil {
+		c.resultCh <- prefetchResult{
+			warning: fmt.Sprintf(
+				"failed to fetch remote config — %v. Falling back to process environment.", err,
+			),
+		}
+	} else {
+		c.resultCh <- prefetchResult{entries: entries}
+	}
+	close(c.resultCh)
+}
+
+func (c *Client) await() prefetchResult {
+	c.once.Do(func() {
+		c.cached = <-c.resultCh
+	})
+	return c.cached
+}
+
+func (c *Client) Initialize() {
+	c.await()
+}
+
 func (c *Client) GetConfigEntries(ctx context.Context) ([]ConfigEntry, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -67,7 +104,6 @@ func (c *Client) GetConfigEntries(ctx context.Context) ([]ConfigEntry, error) {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		// handled below
 	case http.StatusUnauthorized:
 		return nil, ErrUnauthorized
 	case http.StatusNotFound:
@@ -83,62 +119,94 @@ func (c *Client) GetConfigEntries(ctx context.Context) ([]ConfigEntry, error) {
 	return entries, nil
 }
 
-// GetConfig fetches all configuration entries and returns them as a flat key→value map,
-// including both secrets and plain variables.
-func (c *Client) GetConfig(ctx context.Context) (map[string]string, error) {
-	entries, err := c.GetConfigEntries(ctx)
-	if err != nil {
-		return nil, err
+func (c *Client) GetConfig(override bool) map[string]string {
+	r := c.await()
+	if r.warning != "" {
+		fmt.Fprintf(os.Stderr, "[Locko] WARNING: %s\n", r.warning)
 	}
-	result := make(map[string]string, len(entries))
-	for _, e := range entries {
+
+	envMap := processEnvMap()
+	if r.entries == nil {
+		return envMap
+	}
+
+	result := make(map[string]string, len(r.entries)+len(envMap))
+	for _, e := range r.entries {
 		result[e.Key] = e.Value
 	}
-	return result, nil
-}
-
-// GetSecrets fetches all configuration entries and returns only those marked as secrets,
-// as a flat key→value map.
-func (c *Client) GetSecrets(ctx context.Context) (map[string]string, error) {
-	entries, err := c.GetConfigEntries(ctx)
-	if err != nil {
-		return nil, err
-	}
-	result := make(map[string]string)
-	for _, e := range entries {
-		if e.Secret {
-			result[e.Key] = e.Value
+	if override {
+		for k, v := range envMap {
+			if _, exists := result[k]; !exists {
+				result[k] = v
+			}
+		}
+	} else {
+		for k, v := range envMap {
+			result[k] = v
 		}
 	}
-	return result, nil
+	return result
 }
 
-// GetVariables fetches all configuration entries and returns only those NOT marked as
-// secrets, as a flat key→value map.
-func (c *Client) GetVariables(ctx context.Context) (map[string]string, error) {
-	entries, err := c.GetConfigEntries(ctx)
-	if err != nil {
-		return nil, err
+func (c *Client) GetSecrets(override bool) map[string]string {
+	r := c.await()
+	if r.warning != "" {
+		fmt.Fprintf(os.Stderr, "[Locko] WARNING: %s\n", r.warning)
 	}
+
+	if r.entries == nil {
+		return processEnvMap()
+	}
+
 	result := make(map[string]string)
-	for _, e := range entries {
+	for _, e := range r.entries {
 		if !e.Secret {
-			result[e.Key] = e.Value
+			continue
 		}
+		if !override {
+			if v := os.Getenv(e.Key); v != "" {
+				result[e.Key] = v
+				continue
+			}
+		}
+		result[e.Key] = e.Value
 	}
-	return result, nil
+	return result
 }
 
-// InjectIntoEnv fetches all configuration entries and writes them into the
-// process environment via os.Setenv.
-//
-// When override is false, keys already present in the environment are left untouched.
-func (c *Client) InjectIntoEnv(ctx context.Context, override bool) error {
-	entries, err := c.GetConfigEntries(ctx)
-	if err != nil {
-		return err
+func (c *Client) GetVariables(override bool) map[string]string {
+	r := c.await()
+	if r.warning != "" {
+		fmt.Fprintf(os.Stderr, "[Locko] WARNING: %s\n", r.warning)
 	}
-	for _, e := range entries {
+
+	if r.entries == nil {
+		return processEnvMap()
+	}
+
+	result := make(map[string]string)
+	for _, e := range r.entries {
+		if e.Secret {
+			continue
+		}
+		if !override {
+			if v := os.Getenv(e.Key); v != "" {
+				result[e.Key] = v
+				continue
+			}
+		}
+		result[e.Key] = e.Value
+	}
+	return result
+}
+
+func (c *Client) InjectIntoEnv(override bool) error {
+	r := c.await()
+	if r.warning != "" {
+		fmt.Fprintf(os.Stderr, "[Locko] WARNING: %s\n", r.warning)
+		return nil
+	}
+	for _, e := range r.entries {
 		if override || os.Getenv(e.Key) == "" {
 			if err := os.Setenv(e.Key, e.Value); err != nil {
 				return fmt.Errorf("locko: failed to set env var %q: %w", e.Key, err)
@@ -146,4 +214,14 @@ func (c *Client) InjectIntoEnv(ctx context.Context, override bool) error {
 		}
 	}
 	return nil
+}
+
+func processEnvMap() map[string]string {
+	raw := os.Environ()
+	m := make(map[string]string, len(raw))
+	for _, kv := range raw {
+		k, v, _ := strings.Cut(kv, "=")
+		m[k] = v
+	}
+	return m
 }
